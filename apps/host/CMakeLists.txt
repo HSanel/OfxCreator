@@ -1,9 +1,29 @@
 add_executable(ofx_host
   src/main.cpp
+  src/HostGraphicsView.cpp
+  src/HostGraphicsView.h
   src/MainWindow.cpp
   src/MainWindow.h
   src/OfxSdkProbe.cpp
   src/OfxSdkProbe.h
+  src/PlaybackState.h
+  src/PipelineCodec.cpp
+  src/PipelineCodec.h
+  src/ViewerPanel.cpp
+  src/ViewerPanel.h
+  src/nodes/ImageData.h
+  src/nodes/InputNodeModel.cpp
+  src/nodes/InputNodeModel.h
+  src/nodes/OutputNodeModel.cpp
+  src/nodes/OutputNodeModel.h
+  ${CMAKE_SOURCE_DIR}/src/ir/Pipeline.cpp
+  ${CMAKE_SOURCE_DIR}/src/io/ImageSequence.cpp
+)
+
+target_include_directories(ofx_host
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_SOURCE_DIR}/src"
 )
 
 target_link_libraries(ofx_host
