@@ -7,3 +7,4 @@
 *.user
 *.autosave
 Thumbs.db
+/third_party/ffmpeg/

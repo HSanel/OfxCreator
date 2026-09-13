@@ -28,7 +28,7 @@ public:
   QJsonObject save() const override;
   void load(QJsonObject const &json) override;
 
-  QString sequencePath() const { return m_sequence.path(); }
+  QString sequencePath() const { return m_sourcePath; }
   int frameCount() const { return m_sequence.frameCount(); }
   void setSequencePath(QString const &path);
 
@@ -44,6 +44,7 @@ private:
 
   PlaybackState *m_playback = nullptr;
   ImageSequence m_sequence;
+  QString m_sourcePath;
   QWidget *m_widget = nullptr;
   QLineEdit *m_pathEdit = nullptr;
 };

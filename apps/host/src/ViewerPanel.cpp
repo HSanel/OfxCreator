@@ -4,8 +4,11 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
+#include <QPushButton>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStyle>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -67,6 +70,27 @@ ViewerPanel::ViewerPanel(QWidget *parent)
   timelineLayout->addWidget(m_slider, 1);
   timelineLayout->addWidget(m_spin);
 
+  auto *transport = new QWidget;
+  auto *transportLayout = new QHBoxLayout(transport);
+  transportLayout->setContentsMargins(0, 0, 0, 0);
+  m_prevButton = new QPushButton(QStringLiteral("Previous"));
+  m_playButton = new QPushButton(QStringLiteral("Play"));
+  m_stopButton = new QPushButton(QStringLiteral("Stop"));
+  m_nextButton = new QPushButton(QStringLiteral("Next"));
+  m_prevButton->setIcon(style()->standardIcon(QStyle::SP_MediaSkipBackward));
+  m_playButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+  m_stopButton->setIcon(style()->standardIcon(QStyle::SP_MediaStop));
+  m_nextButton->setIcon(style()->standardIcon(QStyle::SP_MediaSkipForward));
+  transportLayout->addStretch(1);
+  transportLayout->addWidget(m_prevButton);
+  transportLayout->addWidget(m_playButton);
+  transportLayout->addWidget(m_stopButton);
+  transportLayout->addWidget(m_nextButton);
+  transportLayout->addStretch(1);
+
+  m_playTimer = new QTimer(this);
+  m_playTimer->setInterval(1000 / 24);
+
   m_info = new QLabel(QStringLiteral("Kein Bild"));
   m_info->setAlignment(Qt::AlignCenter);
   m_info->setWordWrap(true);
@@ -74,6 +98,7 @@ ViewerPanel::ViewerPanel(QWidget *parent)
   layout->addWidget(m_caption);
   layout->addWidget(m_imageView, 1);
   layout->addWidget(timeline);
+  layout->addWidget(transport);
   layout->addWidget(m_info);
 
   connect(m_slider, &QSlider::valueChanged, this, [this](int value) {
@@ -88,6 +113,11 @@ ViewerPanel::ViewerPanel(QWidget *parent)
     m_slider->blockSignals(false);
     Q_EMIT frameMoved(value);
   });
+  connect(m_playButton, &QPushButton::clicked, this, &ViewerPanel::play);
+  connect(m_stopButton, &QPushButton::clicked, this, &ViewerPanel::stopPlayback);
+  connect(m_nextButton, &QPushButton::clicked, this, &ViewerPanel::stepNext);
+  connect(m_prevButton, &QPushButton::clicked, this, &ViewerPanel::stepPrevious);
+  connect(m_playTimer, &QTimer::timeout, this, &ViewerPanel::stepNext);
 
   setFrameRange(0);
   setImage({});
@@ -121,11 +151,14 @@ void ViewerPanel::setSource(QString const &source)
 
 void ViewerPanel::setFrameRange(int frameCount)
 {
-  int const maxFrame = std::max(0, frameCount - 1);
-  m_slider->setEnabled(frameCount > 1);
-  m_spin->setEnabled(frameCount > 0);
+  m_frameCount = std::max(0, frameCount);
+  int const maxFrame = std::max(0, m_frameCount - 1);
   m_slider->setRange(0, maxFrame);
   m_spin->setRange(0, maxFrame);
+  updateTransportEnabled();
+  if (m_frameCount < 2) {
+    stopPlayback();
+  }
 }
 
 void ViewerPanel::setFrame(int frame)
@@ -141,4 +174,59 @@ void ViewerPanel::setFrame(int frame)
 int ViewerPanel::frame() const
 {
   return m_slider->value();
+}
+
+void ViewerPanel::stopPlayback()
+{
+  m_playTimer->stop();
+}
+
+void ViewerPanel::play()
+{
+  if (m_frameCount < 2) {
+    return;
+  }
+  m_playTimer->start();
+}
+
+void ViewerPanel::stepNext()
+{
+  if (m_frameCount <= 0) {
+    return;
+  }
+  int next = m_slider->value() + 1;
+  if (next >= m_frameCount) {
+    next = 0;
+  }
+  applyFrame(next);
+}
+
+void ViewerPanel::stepPrevious()
+{
+  if (m_frameCount <= 0) {
+    return;
+  }
+  int previous = m_slider->value() - 1;
+  if (previous < 0) {
+    previous = m_frameCount - 1;
+  }
+  applyFrame(previous);
+}
+
+void ViewerPanel::applyFrame(int frame)
+{
+  setFrame(frame);
+  Q_EMIT frameMoved(frame);
+}
+
+void ViewerPanel::updateTransportEnabled()
+{
+  bool const hasFrames = m_frameCount > 0;
+  bool const canPlay = m_frameCount > 1;
+  m_slider->setEnabled(canPlay);
+  m_spin->setEnabled(hasFrames);
+  m_playButton->setEnabled(canPlay);
+  m_stopButton->setEnabled(canPlay);
+  m_prevButton->setEnabled(hasFrames);
+  m_nextButton->setEnabled(hasFrames);
 }

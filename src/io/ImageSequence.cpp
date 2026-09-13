@@ -24,6 +24,8 @@ QStringList const &imageSuffixes()
 
 bool ImageSequence::setPath(QString const &path)
 {
+  m_frameCache.clear();
+  m_frameCache.setMaxCost(48);
   m_path = path;
   m_frames = collectFrames(path);
   return !m_frames.isEmpty();
@@ -33,6 +35,7 @@ void ImageSequence::clear()
 {
   m_path.clear();
   m_frames.clear();
+  m_frameCache.clear();
 }
 
 QString ImageSequence::framePath(int index) const
@@ -45,13 +48,22 @@ QString ImageSequence::framePath(int index) const
 
 QImage ImageSequence::loadFrame(int index) const
 {
+  if (QImage *cached = m_frameCache.object(index)) {
+    return *cached;
+  }
+
   QString const file = framePath(index);
   if (file.isEmpty()) {
     return {};
   }
-  QImage image;
-  image.load(file);
-  return image;
+  auto *image = new QImage;
+  if (!image->load(file)) {
+    delete image;
+    return {};
+  }
+  QImage copy = *image;
+  m_frameCache.insert(index, image, 1);
+  return copy;
 }
 
 QStringList ImageSequence::collectFrames(QString const &path)

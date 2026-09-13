@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QCache>
 #include <QImage>
 #include <QString>
 #include <QStringList>
@@ -21,4 +22,5 @@ private:
 
   QString m_path;
   QStringList m_frames;
+  mutable QCache<int, QImage> m_frameCache;
 };

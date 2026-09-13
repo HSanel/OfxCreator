@@ -18,6 +18,7 @@ add_executable(ofx_host
   src/nodes/OutputNodeModel.h
   ${CMAKE_SOURCE_DIR}/src/ir/Pipeline.cpp
   ${CMAKE_SOURCE_DIR}/src/io/ImageSequence.cpp
+  ${CMAKE_SOURCE_DIR}/src/io/VideoIngest.cpp
 )
 
 target_include_directories(ofx_host
@@ -54,4 +55,13 @@ if(WIN32)
             "$<TARGET_FILE:ofx_host>"
     COMMENT "Deploy Qt runtime next to ofx_host"
   )
+  set(_ffmpeg_src "${CMAKE_SOURCE_DIR}/third_party/ffmpeg/bin/ffmpeg.exe")
+  if(EXISTS "${_ffmpeg_src}")
+    add_custom_command(TARGET ofx_host POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+              "${_ffmpeg_src}"
+              "$<TARGET_FILE_DIR:ofx_host>/ffmpeg.exe"
+      COMMENT "Copy bundled ffmpeg next to ofx_host"
+    )
+  endif()
 endif()

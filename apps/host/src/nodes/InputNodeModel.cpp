@@ -3,9 +3,13 @@
 #include "ImageData.h"
 #include "PlaybackState.h"
 
+#include "io/VideoIngest.h"
+
 #include <QApplication>
 #include <QFileDialog>
 #include <QMainWindow>
+#include <QMessageBox>
+#include <QProgressDialog>
 #include <QTimer>
 #include <QHBoxLayout>
 #include <QLineEdit>
@@ -51,7 +55,7 @@ QWidget *InputNodeModel::embeddedWidget()
   layout->setContentsMargins(4, 4, 4, 4);
 
   m_pathEdit = new QLineEdit;
-  m_pathEdit->setPlaceholderText(QStringLiteral("Bild oder Sequenzordner"));
+  m_pathEdit->setPlaceholderText(QStringLiteral("Bild, Video oder Sequenzordner"));
   m_pathEdit->setReadOnly(true);
   refreshPathEdit();
 
@@ -76,7 +80,7 @@ QWidget *InputNodeModel::embeddedWidget()
 QJsonObject InputNodeModel::save() const
 {
   QJsonObject json = NodeDelegateModel::save();
-  json.insert(QStringLiteral("path"), m_sequence.path());
+  json.insert(QStringLiteral("path"), m_sourcePath);
   return json;
 }
 
@@ -87,11 +91,41 @@ void InputNodeModel::load(QJsonObject const &json)
 
 void InputNodeModel::setSequencePath(QString const &path)
 {
+  m_sourcePath = path;
   if (path.isEmpty()) {
     m_sequence.clear();
-  } else {
-    m_sequence.setPath(path);
+    refreshPathEdit();
+    Q_EMIT sequenceChanged();
+    emitCurrentFrame();
+    return;
   }
+
+  QString resolved = path;
+  if (VideoIngest::isVideoFile(path)) {
+    QProgressDialog progress(QStringLiteral("Video wird mit ffmpeg in eine Sequenz zerlegt…"),
+                             QString(),
+                             0,
+                             0,
+                             dialogParent());
+    progress.setWindowModality(Qt::ApplicationModal);
+    progress.setMinimumDuration(0);
+    progress.show();
+    QApplication::processEvents();
+
+    QString error;
+    resolved = VideoIngest::ensureSequence(path, &error);
+    progress.close();
+    if (resolved.isEmpty()) {
+      QMessageBox::warning(dialogParent(), QStringLiteral("FFmpeg"), error);
+      m_sequence.clear();
+      refreshPathEdit();
+      Q_EMIT sequenceChanged();
+      emitCurrentFrame();
+      return;
+    }
+  }
+
+  m_sequence.setPath(resolved);
   refreshPathEdit();
   Q_EMIT sequenceChanged();
   emitCurrentFrame();
@@ -102,9 +136,13 @@ void InputNodeModel::browseFile()
   QTimer::singleShot(0, this, [this]() {
     QString const file = QFileDialog::getOpenFileName(
       dialogParent(),
-      QStringLiteral("Bild wählen"),
-      m_sequence.path(),
-      QStringLiteral("Bilder (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp)"));
+      QStringLiteral("Bild oder Video wählen"),
+      m_sourcePath.isEmpty() ? m_sequence.path() : m_sourcePath,
+      QStringLiteral(
+        "Medien (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp *.mp4 *.mov *.mkv *.avi *.webm *.m4v);;"
+        "Bilder (*.png *.jpg *.jpeg *.bmp *.tif *.tiff *.webp);;"
+        "Video (*.mp4 *.mov *.mkv *.avi *.webm *.m4v);;"
+        "Alle Dateien (*.*)"));
     if (!file.isEmpty()) {
       setSequencePath(file);
     }
@@ -116,7 +154,8 @@ void InputNodeModel::browseFolder()
   QTimer::singleShot(0, this, [this]() {
     QString const folder = QFileDialog::getExistingDirectory(dialogParent(),
                                                              QStringLiteral("Sequenzordner wählen"),
-                                                             m_sequence.path());
+                                                             m_sourcePath.isEmpty() ? m_sequence.path()
+                                                                                    : m_sourcePath);
     if (!folder.isEmpty()) {
       setSequencePath(folder);
     }
@@ -145,8 +184,8 @@ void InputNodeModel::refreshPathEdit()
   if (!m_pathEdit) {
     return;
   }
-  m_pathEdit->setText(m_sequence.path());
-  m_pathEdit->setToolTip(m_sequence.path());
+  m_pathEdit->setText(m_sourcePath);
+  m_pathEdit->setToolTip(m_sourcePath);
 }
 
 void InputNodeModel::emitCurrentFrame()
