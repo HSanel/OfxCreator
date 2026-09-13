@@ -7,6 +7,7 @@
 #include "ViewerPanel.h"
 #include "nodes/ImageData.h"
 #include "nodes/InputNodeModel.h"
+#include "nodes/KernelNodeModel.h"
 #include "nodes/OutputNodeModel.h"
 
 #include <QtNodes/BasicGraphicsScene>
@@ -137,6 +138,10 @@ void MainWindow::registerNodeTypes()
     [playback]() { return std::make_unique<InputNodeModel>(playback); },
     QStringLiteral("IO"));
   m_registry->registerModel<OutputNodeModel>(QStringLiteral("IO"));
+  m_registry->registerModel<CpuNodeModel>(QStringLiteral("Process"));
+  m_registry->registerModel<CudaNodeModel>(QStringLiteral("Process"));
+  m_registry->registerModel<OpenClNodeModel>(QStringLiteral("Process"));
+  m_registry->registerModel<PythonNodeModel>(QStringLiteral("Process"));
 }
 
 void MainWindow::bindNode(unsigned int nodeId)
@@ -157,6 +162,22 @@ void MainWindow::bindNode(unsigned int nodeId)
       }
     });
   }
+  if (auto *kernel = m_graphModel->delegateModel<KernelNodeModel>(nodeId)) {
+    connect(kernel, &QtNodes::NodeDelegateModel::dataUpdated, this, [this, nodeId](QtNodes::PortIndex) {
+      if (inspects(nodeId)) {
+        refreshInspectedView();
+      }
+    });
+  }
+
+  QTimer::singleShot(0, this, [this, nodeId]() {
+    if (!m_scene) {
+      return;
+    }
+    if (auto *ngo = m_scene->nodeGraphicsObject(nodeId)) {
+      ngo->setCacheMode(QGraphicsItem::NoCache);
+    }
+  });
 }
 
 void MainWindow::seedDefaultGraph()
@@ -447,6 +468,9 @@ QImage MainWindow::imageAtPort(QtNodes::NodeId nodeId,
 
   if (auto const *output = m_graphModel->delegateModel<OutputNodeModel>(nodeId)) {
     return output->currentImage();
+  }
+  if (auto const *kernel = m_graphModel->delegateModel<KernelNodeModel>(nodeId)) {
+    return kernel->currentImage();
   }
 
   auto const connections = m_graphModel->connections(nodeId, portType, portIndex);

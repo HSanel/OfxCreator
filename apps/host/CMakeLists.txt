@@ -14,11 +14,18 @@ add_executable(ofx_host
   src/nodes/ImageData.h
   src/nodes/InputNodeModel.cpp
   src/nodes/InputNodeModel.h
+  src/nodes/KernelNodeModel.cpp
+  src/nodes/KernelNodeModel.h
   src/nodes/OutputNodeModel.cpp
   src/nodes/OutputNodeModel.h
   ${CMAKE_SOURCE_DIR}/src/ir/Pipeline.cpp
   ${CMAKE_SOURCE_DIR}/src/io/ImageSequence.cpp
   ${CMAKE_SOURCE_DIR}/src/io/VideoIngest.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/CpuRuntime.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/CudaRuntime.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/OpenClRuntime.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/PortInference.cpp
+  ${CMAKE_SOURCE_DIR}/src/runtime/PythonRuntime.cpp
 )
 
 target_include_directories(ofx_host

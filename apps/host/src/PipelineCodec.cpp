@@ -1,13 +1,12 @@
 #include "PipelineCodec.h"
 
-#include "nodes/InputNodeModel.h"
-
 #include <QtNodes/DataFlowGraphModel>
 #include <QtNodes/Definitions>
 #include <QtNodes/NodeDelegateModel>
 
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPointF>
 
 namespace {
 
@@ -35,8 +34,9 @@ Pipeline PipelineCodec::capture(QtNodes::DataFlowGraphModel &graph, int currentF
     node.x = pos.x();
     node.y = pos.y();
 
-    if (auto const *input = graph.delegateModel<InputNodeModel>(id)) {
-      node.params.insert(QStringLiteral("path"), input->sequencePath());
+    if (auto *model = graph.delegateModel<QtNodes::NodeDelegateModel>(id)) {
+      node.params = model->save();
+      node.params.remove(QStringLiteral("model-name"));
     }
     pipeline.nodes.push_back(node);
 
@@ -65,8 +65,8 @@ bool PipelineCodec::restore(QtNodes::DataFlowGraphModel &graph, Pipeline const &
   for (PipelineNode const &node : pipeline.nodes) {
     QJsonObject internal;
     internal.insert(QStringLiteral("model-name"), nodeKindId(node.kind));
-    if (node.kind == NodeKind::Input) {
-      internal.insert(QStringLiteral("path"), node.params.value(QStringLiteral("path")).toString());
+    for (auto it = node.params.begin(); it != node.params.end(); ++it) {
+      internal.insert(it.key(), it.value());
     }
 
     QJsonObject nodeJson;
