@@ -1,0 +1,9 @@
+/build/
+/out/
+/cmake-build-*/
+/.vs/
+/.idea/
+/CMakeUserPresets.json
+*.user
+*.autosave
+Thumbs.db
