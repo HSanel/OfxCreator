@@ -39,6 +39,7 @@ private:
   void openDocument();
   bool saveDocument();
   bool saveDocumentAs();
+  void exportOfx();
 
   void inspectNode(QtNodes::NodeId nodeId);
   void inspectPort(QtNodes::NodeId nodeId, QtNodes::PortType portType, QtNodes::PortIndex portIndex);

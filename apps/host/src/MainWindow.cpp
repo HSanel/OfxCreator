@@ -3,6 +3,7 @@
 
 #include "OfxSdkProbe.h"
 #include "PipelineCodec.h"
+#include "codegen/OfxExporter.h"
 #include "PlaybackState.h"
 #include "ViewerPanel.h"
 #include "nodes/ImageData.h"
@@ -28,6 +29,9 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QDir>
 #include <QGraphicsItem>
 #include <QGraphicsScene>
 #include <QGraphicsSceneMouseEvent>
@@ -129,6 +133,10 @@ void MainWindow::createMenus()
   auto *saveAsAction = fileMenu->addAction(QStringLiteral("Speichern unter…"));
   saveAsAction->setShortcut(QKeySequence::SaveAs);
   connect(saveAsAction, &QAction::triggered, this, &MainWindow::saveDocumentAs);
+
+  fileMenu->addSeparator();
+  auto *exportAction = fileMenu->addAction(QStringLiteral("OFX Plugin exportieren…"));
+  connect(exportAction, &QAction::triggered, this, &MainWindow::exportOfx);
 }
 
 void MainWindow::registerNodeTypes()
@@ -329,6 +337,45 @@ bool MainWindow::saveDocumentAs()
     return false;
   }
   return saveTo(path);
+}
+
+void MainWindow::exportOfx()
+{
+  QString const dir = QFileDialog::getExistingDirectory(this, QStringLiteral("OFX-Exportordner wählen"));
+  if (dir.isEmpty()) {
+    return;
+  }
+
+  QString name = m_documentPath.isEmpty() ? QStringLiteral("NrFilter")
+                                          : QFileInfo(m_documentPath).completeBaseName();
+  bool ok = false;
+  name = QInputDialog::getText(this,
+                               QStringLiteral("OFX Plugin"),
+                               QStringLiteral("Plugin-Name:"),
+                               QLineEdit::Normal,
+                               name,
+                               &ok);
+  if (!ok || name.trimmed().isEmpty()) {
+    return;
+  }
+
+  Pipeline const pipeline = PipelineCodec::capture(*m_graphModel, m_playback->frame());
+  QString const projectDir = QDir(dir).filePath(name.trimmed());
+  OfxExportResult const result = OfxExporter::exportPipeline(pipeline, projectDir, name);
+  if (!result.ok) {
+    QMessageBox::warning(this, QStringLiteral("OFX Export"), result.error);
+    return;
+  }
+
+  QString message = QStringLiteral("Projekt: %1").arg(result.projectDir);
+  if (!result.pluginPath.isEmpty()) {
+    message += QStringLiteral("\nBundle: %1").arg(result.pluginPath);
+  }
+  if (!result.warnings.isEmpty()) {
+    message += QLatin1Char('\n') + result.warnings.join(QLatin1Char('\n'));
+  }
+  QMessageBox::information(this, QStringLiteral("OFX Export"), message);
+  statusBar()->showMessage(QStringLiteral("OFX exportiert: %1").arg(result.projectDir), 6000);
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)

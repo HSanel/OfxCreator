@@ -5,10 +5,12 @@
 
 #include <QPoint>
 #include <QPointF>
+#include <QPointer>
 
 class QWidget;
 class QWheelEvent;
 class QKeyEvent;
+class QPlainTextEdit;
 
 class HostGraphicsView : public QtNodes::GraphicsView
 {
@@ -33,7 +35,7 @@ protected:
 
 private:
   QWidget *embeddedWidgetAt(QPoint const &viewPos) const;
-  QWidget *scrollableViewportAt(QPoint const &viewPos) const;
+  QPlainTextEdit *plainTextEditAt(QPoint const &viewPos) const;
   bool embeddedEditorHasFocus() const;
   void clearEmbeddedFocus();
   QtNodes::NodeGraphicsObject *nodeItemAt(QPoint const &viewPos) const;
@@ -47,4 +49,5 @@ private:
   int m_resizeEdges = ResizeNone;
   QtNodes::NodeGraphicsObject *m_resizeNode = nullptr;
   QPointF m_lastResizeItemPos;
+  QPointer<QPlainTextEdit> m_activeTextEdit;
 };

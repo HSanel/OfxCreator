@@ -26,6 +26,7 @@ add_executable(ofx_host
   ${CMAKE_SOURCE_DIR}/src/runtime/OpenClRuntime.cpp
   ${CMAKE_SOURCE_DIR}/src/runtime/PortInference.cpp
   ${CMAKE_SOURCE_DIR}/src/runtime/PythonRuntime.cpp
+  ${CMAKE_SOURCE_DIR}/src/codegen/OfxExporter.cpp
 )
 
 target_include_directories(ofx_host
@@ -46,6 +47,8 @@ target_link_libraries(ofx_host
 target_compile_definitions(ofx_host
   PRIVATE
     QT_NO_KEYWORDS
+    NR_OPENFX_INCLUDE="${CMAKE_SOURCE_DIR}/third_party/openfx/include"
+    NR_CODEGEN_DIR="${CMAKE_SOURCE_DIR}/src/codegen"
 )
 
 if(MINGW)

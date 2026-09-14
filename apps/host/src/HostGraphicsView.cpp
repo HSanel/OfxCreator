@@ -4,9 +4,7 @@
 #include <QtNodes/Definitions>
 #include <QtNodes/internal/AbstractNodeGeometry.hpp>
 
-#include <QAbstractScrollArea>
 #include <QApplication>
-#include <QCoreApplication>
 #include <QGraphicsProxyWidget>
 #include <QKeyEvent>
 #include <QLayout>
@@ -78,15 +76,12 @@ QWidget *HostGraphicsView::embeddedWidgetAt(QPoint const &viewPos) const
   return child ? child : proxy->widget();
 }
 
-QWidget *HostGraphicsView::scrollableViewportAt(QPoint const &viewPos) const
+QPlainTextEdit *HostGraphicsView::plainTextEditAt(QPoint const &viewPos) const
 {
-  if (resizeEdgesAt(viewPos) != ResizeNone) {
-    return nullptr;
-  }
   QWidget *hit = embeddedWidgetAt(viewPos);
   while (hit) {
-    if (auto *area = qobject_cast<QAbstractScrollArea *>(hit)) {
-      return area->viewport();
+    if (auto *edit = qobject_cast<QPlainTextEdit *>(hit)) {
+      return edit;
     }
     hit = hit->parentWidget();
   }
@@ -95,13 +90,29 @@ QWidget *HostGraphicsView::scrollableViewportAt(QPoint const &viewPos) const
 
 bool HostGraphicsView::embeddedEditorHasFocus() const
 {
+  if (m_activeTextEdit) {
+    return true;
+  }
   QWidget *fw = QApplication::focusWidget();
   return qobject_cast<QPlainTextEdit *>(fw) != nullptr || qobject_cast<QLineEdit *>(fw) != nullptr;
 }
 
 void HostGraphicsView::clearEmbeddedFocus()
 {
+  m_activeTextEdit.clear();
   if (scene()) {
+    for (QGraphicsItem *item : scene()->items()) {
+      auto *proxy = qgraphicsitem_cast<QGraphicsProxyWidget *>(item);
+      if (!proxy || !proxy->widget()) {
+        continue;
+      }
+      for (QPlainTextEdit *edit : proxy->widget()->findChildren<QPlainTextEdit *>()) {
+        edit->clearFocus();
+      }
+      for (QLineEdit *line : proxy->widget()->findChildren<QLineEdit *>()) {
+        line->clearFocus();
+      }
+    }
     scene()->clearFocus();
   }
   if (QWidget *fw = QApplication::focusWidget()) {
@@ -261,6 +272,15 @@ void HostGraphicsView::mousePressEvent(QMouseEvent *event)
                          || (event->button() == Qt::LeftButton && emptyCanvas);
   if (emptyCanvas) {
     clearEmbeddedFocus();
+  } else if (event->button() == Qt::LeftButton) {
+    if (QPlainTextEdit *edit = plainTextEditAt(event->pos())) {
+      m_activeTextEdit = edit;
+    } else {
+      m_activeTextEdit.clear();
+      if (auto *edit = qobject_cast<QPlainTextEdit *>(QApplication::focusWidget())) {
+        edit->clearFocus();
+      }
+    }
   }
   if (panButton) {
     m_panning = true;
@@ -270,6 +290,9 @@ void HostGraphicsView::mousePressEvent(QMouseEvent *event)
     return;
   }
   QtNodes::GraphicsView::mousePressEvent(event);
+  if (m_activeTextEdit) {
+    m_activeTextEdit->setFocus(Qt::MouseFocusReason);
+  }
 }
 
 void HostGraphicsView::mouseMoveEvent(QMouseEvent *event)
@@ -340,18 +363,34 @@ void HostGraphicsView::mouseReleaseEvent(QMouseEvent *event)
 
 void HostGraphicsView::wheelEvent(QWheelEvent *event)
 {
-  QWidget *viewportWidget = scrollableViewportAt(event->position().toPoint());
-  if (viewportWidget) {
-    QPointF const local = viewportWidget->mapFromGlobal(event->globalPosition());
-    QWheelEvent forwarded(local,
-                          event->globalPosition(),
-                          event->pixelDelta(),
-                          event->angleDelta(),
-                          event->buttons(),
-                          event->modifiers(),
-                          event->phase(),
-                          event->inverted());
-    QCoreApplication::sendEvent(viewportWidget, &forwarded);
+  QPoint const viewPos = event->position().toPoint();
+  QPlainTextEdit *edit = plainTextEditAt(viewPos);
+  if (edit && m_activeTextEdit == edit) {
+    int dy = event->pixelDelta().y();
+    int dx = event->pixelDelta().x();
+    if (dy == 0 && dx == 0) {
+      int const line = std::max(1, edit->fontMetrics().lineSpacing());
+      auto notches = [](int angle) {
+        if (angle == 0) {
+          return 0;
+        }
+        int const n = angle / 120;
+        return n == 0 ? (angle > 0 ? 1 : -1) : n;
+      };
+      dy = notches(event->angleDelta().y()) * line * 3;
+      dx = notches(event->angleDelta().x()) * line * 3;
+    }
+    if (event->modifiers() & Qt::ShiftModifier) {
+      std::swap(dx, dy);
+    }
+    if (QScrollBar *vbar = edit->verticalScrollBar()) {
+      vbar->setValue(vbar->value() - dy);
+    }
+    if (dx != 0) {
+      if (QScrollBar *hbar = edit->horizontalScrollBar()) {
+        hbar->setValue(hbar->value() - dx);
+      }
+    }
     event->accept();
     return;
   }
