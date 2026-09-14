@@ -229,6 +229,8 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
   auto cuDeviceGet = loadSym<CUresult (*)(CUdevice *, int)>(driver, "cuDeviceGet");
   auto cuDeviceGetAttribute = loadSym<CUresult (*)(int *, int, CUdevice)>(driver, "cuDeviceGetAttribute");
   auto cuGetErrorName = loadSym<CUresult (*)(CUresult, char const **)>(driver, "cuGetErrorName");
+  auto cuCtxGetCurrent = loadSym<CUresult (*)(CUcontext *)>(driver, "cuCtxGetCurrent");
+  auto cuCtxGetDevice = loadSym<CUresult (*)(CUdevice *)>(driver, "cuCtxGetDevice");
   auto cuCtxCreate = loadSym<CUresult (*)(CUcontext *, unsigned int, CUdevice)>(driver, "cuCtxCreate_v2");
   auto cuCtxDestroy = loadSym<CUresult (*)(CUcontext)>(driver, "cuCtxDestroy_v2");
   auto cuMemAlloc = loadSym<CUresult (*)(CUdeviceptr *, size_t)>(driver, "cuMemAlloc_v2");
@@ -273,13 +275,29 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
     }
     return false;
   }
+  CUcontext existing = nullptr;
+  if (cuCtxGetCurrent) {
+    cuCtxGetCurrent(&existing);
+  }
   CUdevice dev = 0;
-  rc = cuDeviceGet(&dev, 0);
-  if (rc != 0) {
-    if (error) {
-      *error = "Kein CUDA-Gerät (" + cudaName(rc) + ").";
+  CUcontext owned = nullptr;
+  if (existing && cuCtxGetDevice && cuCtxGetDevice(&dev) == 0) {
+    // Host (z. B. Resolve) hat bereits einen CUDA-Kontext — nicht zerstören.
+  } else {
+    rc = cuDeviceGet(&dev, 0);
+    if (rc != 0) {
+      if (error) {
+        *error = "Kein CUDA-Gerät (" + cudaName(rc) + ").";
+      }
+      return false;
     }
-    return false;
+    rc = cuCtxCreate(&owned, 0, dev);
+    if (rc != 0) {
+      if (error) {
+        *error = "cuCtxCreate fehlgeschlagen (" + cudaName(rc) + ").";
+      }
+      return false;
+    }
   }
   int major = 0;
   int minor = 0;
@@ -287,14 +305,6 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
   if (cuDeviceGetAttribute) {
     cuDeviceGetAttribute(&major, 75, dev);
     cuDeviceGetAttribute(&minor, 76, dev);
-  }
-  CUcontext ctx = nullptr;
-  rc = cuCtxCreate(&ctx, 0, dev);
-  if (rc != 0) {
-    if (error) {
-      *error = "cuCtxCreate fehlgeschlagen (" + cudaName(rc) + ").";
-    }
-    return false;
   }
 
   auto compilePtx = [&](char const *const *opts, int nOpts, std::vector<char> *ptxOut, std::string *compileError) {
@@ -337,7 +347,9 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
     compiled = compilePtx(nullptr, 0, &ptx, &compileError);
   }
   if (!compiled) {
-    cuCtxDestroy(ctx);
+    if (owned) {
+      cuCtxDestroy(owned);
+    }
     if (error) {
       *error = compileError;
     }
@@ -347,7 +359,9 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
   CUmodule mod = nullptr;
   rc = cuModuleLoadData(&mod, ptx.data());
   if (rc != 0) {
-    cuCtxDestroy(ctx);
+    if (owned) {
+      cuCtxDestroy(owned);
+    }
     if (error) {
       *error = "cuModuleLoadData fehlgeschlagen (" + cudaName(rc)
                + (major > 0 ? ", sm_" + std::to_string(major) + std::to_string(minor) : std::string()) + ").";
@@ -357,7 +371,9 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
   CUfunction fn = nullptr;
   if (cuModuleGetFunction(&fn, mod, "process") != 0) {
     cuModuleUnload(mod);
-    cuCtxDestroy(ctx);
+    if (owned) {
+      cuCtxDestroy(owned);
+    }
     if (error) {
       *error = "CUDA-Kernel 'process' fehlt.";
     }
@@ -380,7 +396,9 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
   cuMemFree(dIn);
   cuMemFree(dOut);
   cuModuleUnload(mod);
-  cuCtxDestroy(ctx);
+  if (owned) {
+    cuCtxDestroy(owned);
+  }
   return true;
 #else
   (void)source;
