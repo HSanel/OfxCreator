@@ -1,15 +1,18 @@
 #include "HostGraphicsView.h"
+#include "HostGraphModel.h"
 #include "MainWindow.h"
 
 #include "OfxSdkProbe.h"
 #include "PipelineCodec.h"
 #include "codegen/OfxExporter.h"
+#include "ofx/NrOfxLoader.h"
 #include "PlaybackState.h"
 #include "ViewerPanel.h"
 #include "nodes/ImageData.h"
 #include "nodes/InputNodeModel.h"
 #include "nodes/KernelNodeModel.h"
 #include "nodes/OutputNodeModel.h"
+#include "nodes/PluginNodeModel.h"
 
 #include <QtNodes/BasicGraphicsScene>
 #include <QtNodes/ConnectionIdUtils>
@@ -32,12 +35,14 @@
 #include <QInputDialog>
 #include <QLineEdit>
 #include <QDir>
+#include <QDialog>
 #include <QGraphicsItem>
 #include <QGraphicsScene>
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsView>
 #include <QJsonDocument>
 #include <QKeySequence>
+#include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QSplitter>
@@ -51,8 +56,9 @@ MainWindow::MainWindow(QWidget *parent)
   : QMainWindow(parent)
   , m_registry(std::make_shared<QtNodes::NodeDelegateModelRegistry>())
   , m_playback(new PlaybackState(this))
+  , m_ofxLoader(std::make_unique<NrOfxLoader>())
 {
-  m_graphModel = std::make_unique<QtNodes::DataFlowGraphModel>(m_registry);
+  m_graphModel = std::make_unique<HostGraphModel>(m_registry);
 
   setWindowTitle(QStringLiteral("NR OFX Host"));
   resize(1280, 720);
@@ -107,7 +113,10 @@ MainWindow::MainWindow(QWidget *parent)
   connect(m_viewer, &ViewerPanel::frameMoved, m_playback, &PlaybackState::setFrame);
 
   seedDefaultGraph();
+  m_ofxBadge = new QLabel(QStringLiteral("OFX: nicht geladen"));
+  statusBar()->addPermanentWidget(m_ofxBadge);
   statusBar()->showMessage(ofxSdkVersionLabel());
+  updateOfxUi();
   updateWindowTitle();
   QTimer::singleShot(0, this, &MainWindow::frameGraphView);
 }
@@ -137,6 +146,14 @@ void MainWindow::createMenus()
   fileMenu->addSeparator();
   auto *exportAction = fileMenu->addAction(QStringLiteral("OFX Plugin exportieren…"));
   connect(exportAction, &QAction::triggered, this, &MainWindow::exportOfx);
+
+  auto *loadOfxAction = fileMenu->addAction(QStringLiteral("OFX Plugin laden…"));
+  connect(loadOfxAction, &QAction::triggered, this, &MainWindow::loadOfxPlugin);
+
+  m_ofxPreviewAction = fileMenu->addAction(QStringLiteral("OFX im Viewer"));
+  m_ofxPreviewAction->setCheckable(true);
+  m_ofxPreviewAction->setEnabled(false);
+  connect(m_ofxPreviewAction, &QAction::toggled, this, [this](bool) { refreshInspectedView(); });
 }
 
 void MainWindow::registerNodeTypes()
@@ -150,14 +167,22 @@ void MainWindow::registerNodeTypes()
   m_registry->registerModel<CudaNodeModel>(QStringLiteral("Process"));
   m_registry->registerModel<OpenClNodeModel>(QStringLiteral("Process"));
   m_registry->registerModel<PythonNodeModel>(QStringLiteral("Process"));
+  m_registry->registerModel<PluginNodeModel>(
+    [playback]() { return std::make_unique<PluginNodeModel>(playback); },
+    QStringLiteral("Process"));
 }
 
 void MainWindow::bindNode(unsigned int nodeId)
 {
   if (auto *input = m_graphModel->delegateModel<InputNodeModel>(nodeId)) {
-    connect(input, &InputNodeModel::sequenceChanged, this, &MainWindow::updateFrameCount);
+    connect(input, &InputNodeModel::sequenceChanged, this, [this]() {
+      updateFrameCount();
+      if (m_ofxPreviewAction && m_ofxPreviewAction->isChecked()) {
+        refreshInspectedView();
+      }
+    });
     connect(input, &QtNodes::NodeDelegateModel::dataUpdated, this, [this, nodeId](QtNodes::PortIndex) {
-      if (inspects(nodeId)) {
+      if (inspects(nodeId) || (m_ofxPreviewAction && m_ofxPreviewAction->isChecked())) {
         refreshInspectedView();
       }
     });
@@ -172,6 +197,13 @@ void MainWindow::bindNode(unsigned int nodeId)
   }
   if (auto *kernel = m_graphModel->delegateModel<KernelNodeModel>(nodeId)) {
     connect(kernel, &QtNodes::NodeDelegateModel::dataUpdated, this, [this, nodeId](QtNodes::PortIndex) {
+      if (inspects(nodeId)) {
+        refreshInspectedView();
+      }
+    });
+  }
+  if (auto *plugin = m_graphModel->delegateModel<PluginNodeModel>(nodeId)) {
+    connect(plugin, &QtNodes::NodeDelegateModel::dataUpdated, this, [this, nodeId](QtNodes::PortIndex) {
       if (inspects(nodeId)) {
         refreshInspectedView();
       }
@@ -224,7 +256,30 @@ void MainWindow::updateWindowTitle()
   QString const name = m_documentPath.isEmpty()
                          ? QStringLiteral("Unbenannt")
                          : QFileInfo(m_documentPath).fileName();
-  setWindowTitle(QStringLiteral("%1 — NR OFX Host").arg(name));
+  if (m_ofxLoader && m_ofxLoader->isLoaded()) {
+    setWindowTitle(QStringLiteral("%1 — NR OFX Host · OFX: %2").arg(name, m_ofxLoader->pluginId()));
+  } else {
+    setWindowTitle(QStringLiteral("%1 — NR OFX Host").arg(name));
+  }
+}
+
+void MainWindow::updateOfxUi()
+{
+  bool const loaded = m_ofxLoader && m_ofxLoader->isLoaded();
+  if (m_ofxPreviewAction) {
+    m_ofxPreviewAction->setEnabled(loaded);
+    if (loaded) {
+      m_ofxPreviewAction->setText(QStringLiteral("OFX im Viewer (%1)").arg(m_ofxLoader->pluginId()));
+    } else {
+      m_ofxPreviewAction->setText(QStringLiteral("OFX im Viewer"));
+      m_ofxPreviewAction->setChecked(false);
+    }
+  }
+  if (m_ofxBadge) {
+    m_ofxBadge->setText(loaded ? QStringLiteral("OFX: %1").arg(m_ofxLoader->pluginId())
+                               : QStringLiteral("OFX: nicht geladen"));
+  }
+  updateWindowTitle();
 }
 
 bool MainWindow::saveTo(QString const &path)
@@ -367,15 +422,172 @@ void MainWindow::exportOfx()
     return;
   }
 
-  QString message = QStringLiteral("Projekt: %1").arg(result.projectDir);
+  QString message = QStringLiteral(
+      "Das Plugin liegt als Ordner hier:\n%1\n\n"
+      "Darin: %2.ofx.bundle → Contents → Win64 → %2.ofx")
+                      .arg(result.projectDir, QFileInfo(result.projectDir).fileName());
   if (!result.pluginPath.isEmpty()) {
-    message += QStringLiteral("\nBundle: %1").arg(result.pluginPath);
+    message += QStringLiteral("\n\nKompilierte Datei:\n%1").arg(result.pluginPath);
+  } else {
+    message += QStringLiteral(
+        "\n\nHinweis: MinGW hat die .ofx nicht gebaut. "
+        "CMake-Projekt im gleichen Ordner mit MSVC bauen, oder g++ prüfen.");
   }
   if (!result.warnings.isEmpty()) {
     message += QLatin1Char('\n') + result.warnings.join(QLatin1Char('\n'));
   }
-  QMessageBox::information(this, QStringLiteral("OFX Export"), message);
+  m_lastOfxDir = result.projectDir;
+
+  auto const loadNow = QMessageBox::question(this,
+                                             QStringLiteral("OFX Export"),
+                                             message + QStringLiteral("\n\nPlugin jetzt in den Graph laden?"),
+                                             QMessageBox::Yes | QMessageBox::No,
+                                             QMessageBox::Yes);
+  if (loadNow == QMessageBox::Yes) {
+    loadOfxIntoPluginNode(!result.pluginPath.isEmpty() ? result.pluginPath : result.bundlePath);
+  }
   statusBar()->showMessage(QStringLiteral("OFX exportiert: %1").arg(result.projectDir), 6000);
+}
+
+bool MainWindow::tryLoadOfx(QString const &path)
+{
+  QString error;
+  if (!m_ofxLoader->loadBundle(path, &error)) {
+    QMessageBox::warning(this,
+                         QStringLiteral("OFX laden"),
+                         error
+                           + QStringLiteral(
+                               "\n\nBitte den Exportordner wählen, den Ordner "
+                               "Name.ofx.bundle, oder die Datei "
+                               "Name.ofx.bundle\\Contents\\Win64\\Name.ofx"));
+    m_ofxPreviewAction->setEnabled(false);
+    m_ofxPreviewAction->setChecked(false);
+    updateOfxUi();
+    return false;
+  }
+  m_ofxPreviewAction->setEnabled(true);
+  m_ofxPreviewAction->setChecked(true);
+  updateOfxUi();
+  refreshInspectedView();
+
+  QString body = QStringLiteral("Geladen: %1\n\nRechts unten in der Statusleiste steht „OFX: …“.\n"
+                                "Unter Datei ist „OFX im Viewer“ angehakt.")
+                   .arg(m_ofxLoader->pluginId());
+  if (currentInputImage().isNull()) {
+    body += QStringLiteral(
+        "\n\nDer Viewer bleibt leer, bis am Input-Knoten ein Bild, Video oder Ordner gewählt ist.");
+  } else {
+    body += QStringLiteral("\n\nDer Viewer zeigt die Filter-Ausgabe des Plugins.");
+  }
+  QMessageBox::information(this, QStringLiteral("OFX geladen"), body);
+  return true;
+}
+
+QtNodes::NodeId MainWindow::findPluginNodeId(QtNodes::NodeId preferred) const
+{
+  if (preferred != QtNodes::InvalidNodeId && m_graphModel->delegateModel<PluginNodeModel>(preferred)) {
+    return preferred;
+  }
+  for (QtNodes::NodeId const id : m_graphModel->allNodeIds()) {
+    if (m_graphModel->delegateModel<PluginNodeModel>(id)) {
+      return id;
+    }
+  }
+  return QtNodes::InvalidNodeId;
+}
+
+QtNodes::NodeId MainWindow::ensurePluginNode()
+{
+  QtNodes::NodeId pluginId = findPluginNodeId(m_inspectNodeId);
+  if (pluginId != QtNodes::InvalidNodeId) {
+    return pluginId;
+  }
+
+  pluginId = m_graphModel->addNode(QStringLiteral("Plugin"));
+  QtNodes::NodeId inputId = QtNodes::InvalidNodeId;
+  QtNodes::NodeId outputId = QtNodes::InvalidNodeId;
+  for (QtNodes::NodeId const id : m_graphModel->allNodeIds()) {
+    if (m_graphModel->delegateModel<InputNodeModel>(id)) {
+      inputId = id;
+    } else if (m_graphModel->delegateModel<OutputNodeModel>(id)) {
+      outputId = id;
+    }
+  }
+
+  QPointF pos(250.0, 160.0);
+  if (inputId != QtNodes::InvalidNodeId && outputId != QtNodes::InvalidNodeId) {
+    QPointF const inPos = m_graphModel->nodeData(inputId, QtNodes::NodeRole::Position).value<QPointF>();
+    QPointF const outPos = m_graphModel->nodeData(outputId, QtNodes::NodeRole::Position).value<QPointF>();
+    pos = (inPos + outPos) / 2.0;
+    for (QtNodes::ConnectionId const &connection : m_graphModel->allConnectionIds(inputId)) {
+      if (connection.outNodeId == inputId && connection.inNodeId == outputId) {
+        m_graphModel->deleteConnection(connection);
+        m_graphModel->addConnection(QtNodes::ConnectionId{inputId, 0, pluginId, 0});
+        m_graphModel->addConnection(QtNodes::ConnectionId{pluginId, 0, outputId, 0});
+        break;
+      }
+    }
+  }
+  m_graphModel->setNodeData(pluginId, QtNodes::NodeRole::Position, pos);
+  return pluginId;
+}
+
+bool MainWindow::loadOfxIntoPluginNode(QString const &path)
+{
+  QtNodes::NodeId const pluginId = ensurePluginNode();
+  auto *plugin = m_graphModel->delegateModel<PluginNodeModel>(pluginId);
+  if (!plugin) {
+    return tryLoadOfx(path);
+  }
+
+  QFileInfo const info(path);
+  if (info.exists()) {
+    m_lastOfxDir = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
+  }
+
+  QString error;
+  if (!plugin->loadPath(path, &error)) {
+    QMessageBox::warning(this, QStringLiteral("OFX laden"), error);
+    return false;
+  }
+
+  if (m_ofxPreviewAction) {
+    m_ofxPreviewAction->setChecked(false);
+  }
+  inspectNode(pluginId);
+  statusBar()->showMessage(QStringLiteral("Plugin-Knoten: %1").arg(plugin->pluginId()), 6000);
+  return true;
+}
+
+void MainWindow::loadOfxPlugin()
+{
+  QFileDialog dialog(this, QStringLiteral("OFX Plugin laden"));
+  dialog.setDirectory(m_lastOfxDir.isEmpty() ? QDir::homePath() : m_lastOfxDir);
+  dialog.setFileMode(QFileDialog::ExistingFile);
+  dialog.setNameFilter(QStringLiteral("OFX Plugin (*.ofx);;Alle Dateien (*)"));
+  dialog.setLabelText(QFileDialog::Accept, QStringLiteral("Laden"));
+  dialog.setOption(QFileDialog::DontUseNativeDialog, false);
+  if (dialog.exec() != QDialog::Accepted) {
+    return;
+  }
+  QStringList const files = dialog.selectedFiles();
+  if (files.isEmpty()) {
+    return;
+  }
+  loadOfxIntoPluginNode(files.first());
+}
+
+QImage MainWindow::currentInputImage()
+{
+  for (QtNodes::NodeId const id : m_graphModel->allNodeIds()) {
+    if (auto *input = m_graphModel->delegateModel<InputNodeModel>(id)) {
+      QImage image = input->currentImage();
+      if (!image.isNull()) {
+        return image;
+      }
+    }
+  }
+  return {};
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -452,6 +664,21 @@ void MainWindow::refreshInspectedView()
   QImage image;
   QString source = QStringLiteral("Viewer");
 
+  if (m_ofxPreviewAction && m_ofxPreviewAction->isChecked() && m_ofxLoader && m_ofxLoader->isLoaded()) {
+    QString error;
+    QImage const sourceImage = currentInputImage();
+    image = m_ofxLoader->render(sourceImage, m_playback->frame(), m_playback->frameCount(), &error);
+    source = QStringLiteral("Viewer · OFX · %1").arg(m_ofxLoader->pluginId());
+    m_viewer->setSource(source);
+    m_viewer->setImage(image);
+    if (image.isNull()) {
+      m_viewer->setPlaceholder(error.isEmpty()
+                                 ? QStringLiteral("OFX geladen, aber kein Bild.\nAm Input-Knoten eine Datei wählen.")
+                                 : error);
+    }
+    return;
+  }
+
   auto nodeName = [this](QtNodes::NodeId const id) {
     return m_graphModel->nodeData(id, QtNodes::NodeRole::Type).toString();
   };
@@ -518,6 +745,9 @@ QImage MainWindow::imageAtPort(QtNodes::NodeId nodeId,
   }
   if (auto const *kernel = m_graphModel->delegateModel<KernelNodeModel>(nodeId)) {
     return kernel->currentImage();
+  }
+  if (auto const *plugin = m_graphModel->delegateModel<PluginNodeModel>(nodeId)) {
+    return plugin->currentImage();
   }
 
   auto const connections = m_graphModel->connections(nodeId, portType, portIndex);

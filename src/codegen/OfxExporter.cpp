@@ -260,6 +260,14 @@ QString pluginCpp(QString const &pluginId, QString const &label, QString const &
 OfxHost *gHost = nullptr;
 OfxImageEffectSuiteV1 *gEffectHost = nullptr;
 OfxPropertySuiteV1 *gPropHost = nullptr;
+OfxMessageSuiteV1 *gMessageHost = nullptr;
+
+static void report(OfxImageEffectHandle instance, char const *text)
+{
+  if (gMessageHost && gMessageHost->message && text && *text) {
+    gMessageHost->message(instance, kOfxMessageError, nullptr, "%s", text);
+  }
+}
 
 /*NR_CPU_INCLUDES*/
 /*NR_GPU_SOURCES*/
@@ -323,12 +331,19 @@ static OfxStatus render(OfxImageEffectHandle instance, OfxPropertySetHandle inAr
   gPropHost->propGetIntN(inArgs, kOfxImageEffectPropRenderWindow, 4, &renderWindow.x1);
 
   OfxImageClipHandle outputClip = nullptr;
-  gEffectHost->clipGetHandle(instance, kOfxImageEffectOutputClipName, &outputClip, nullptr);
+  OfxImageClipHandle sourceClip = nullptr;
+  if (gEffectHost->clipGetHandle(instance, kOfxImageEffectOutputClipName, &outputClip, nullptr) != kOfxStatOK
+      || gEffectHost->clipGetHandle(instance, kOfxImageEffectSimpleSourceClipName, &sourceClip, nullptr) != kOfxStatOK) {
+    report(instance, "clipGetHandle Source/Output fehlgeschlagen.");
+    return kOfxStatFailed;
+  }
 
   OfxPropertySetHandle outputImg = nullptr;
   OfxPropertySetHandle sourceImg = nullptr;
   try {
-    if (gEffectHost->clipGetImage(outputClip, time, nullptr, &outputImg) != kOfxStatOK) {
+    OfxStatus const outGot = gEffectHost->clipGetImage(outputClip, time, nullptr, &outputImg);
+    if (outGot != kOfxStatOK) {
+      report(instance, "clipGetImage Output fehlgeschlagen.");
       throw NoImageEx();
     }
     int dstRowBytes = 0;
@@ -338,9 +353,9 @@ static OfxStatus render(OfxImageEffectHandle instance, OfxPropertySetHandle inAr
     gPropHost->propGetIntN(outputImg, kOfxImagePropBounds, 4, &dstRect.x1);
     gPropHost->propGetPointer(outputImg, kOfxImagePropData, 0, &dstPtr);
 
-    OfxImageClipHandle sourceClip = nullptr;
-    gEffectHost->clipGetHandle(instance, kOfxImageEffectSimpleSourceClipName, &sourceClip, nullptr);
-    if (gEffectHost->clipGetImage(sourceClip, time, nullptr, &sourceImg) != kOfxStatOK) {
+    OfxStatus const srcGot = gEffectHost->clipGetImage(sourceClip, time, nullptr, &sourceImg);
+    if (srcGot != kOfxStatOK) {
+      report(instance, "clipGetImage Source fehlgeschlagen.");
       throw NoImageEx();
     }
     int srcRowBytes = 0;
@@ -349,12 +364,17 @@ static OfxStatus render(OfxImageEffectHandle instance, OfxPropertySetHandle inAr
     gPropHost->propGetInt(sourceImg, kOfxImagePropRowBytes, 0, &srcRowBytes);
     gPropHost->propGetIntN(sourceImg, kOfxImagePropBounds, 4, &srcRect.x1);
     gPropHost->propGetPointer(sourceImg, kOfxImagePropData, 0, &srcPtr);
+    if (!srcPtr || !dstPtr) {
+      report(instance, "Bildpuffer ist leer.");
+      throw NoImageEx();
+    }
 
     auto *src = static_cast<OfxRGBAColourB *>(srcPtr);
     auto *dst = static_cast<OfxRGBAColourB *>(dstPtr);
     int const width = renderWindow.x2 - renderWindow.x1;
     int const height = renderWindow.y2 - renderWindow.y1;
     if (width <= 0 || height <= 0) {
+      report(instance, "RenderWindow ist leer.");
       throw NoImageEx();
     }
     size_t const bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
@@ -365,7 +385,11 @@ static OfxStatus render(OfxImageEffectHandle instance, OfxPropertySetHandle inAr
     unsigned char *out [[maybe_unused]] = bufB.data();
     std::string gpuError;
 /*NR_STEPS*/
-    unpackRgba(in, dst, dstRect, dstRowBytes, renderWindow);
+    if (status == kOfxStatOK) {
+      unpackRgba(in, dst, dstRect, dstRowBytes, renderWindow);
+    } else if (!gpuError.empty()) {
+      report(instance, gpuError.c_str());
+    }
   } catch (NoImageEx &) {
     if (!gEffectHost->abort(instance)) {
       status = kOfxStatFailed;
@@ -410,6 +434,7 @@ static OfxStatus onLoad(void)
   }
   gEffectHost = (OfxImageEffectSuiteV1 *)gHost->fetchSuite(gHost->host, kOfxImageEffectSuite, 1);
   gPropHost = (OfxPropertySuiteV1 *)gHost->fetchSuite(gHost->host, kOfxPropertySuite, 1);
+  gMessageHost = (OfxMessageSuiteV1 *)gHost->fetchSuite(gHost->host, kOfxMessageSuite, 1);
   if (!gEffectHost || !gPropHost) {
     return kOfxStatErrMissingHostFeature;
   }
@@ -495,6 +520,13 @@ OfxExportResult OfxExporter::exportPipeline(Pipeline const &pipeline, QString co
   QString cpuIncludes;
   QString gpuSources;
 
+  for (PipelineNode const &node : pipeline.nodes) {
+    if (node.kind == NodeKind::Plugin) {
+      result.warnings.push_back(
+          QStringLiteral("Plugin-Knoten %1 wird übersprungen (bereits ein .ofx).").arg(node.id));
+    }
+  }
+
   for (quint64 id : topoKernelIds(pipeline)) {
     PipelineNode const *node = byId.value(id);
     if (!node) {
@@ -542,27 +574,37 @@ OfxExportResult OfxExporter::exportPipeline(Pipeline const &pipeline, QString co
   for (ExportStep const &step : steps) {
     if (step.kind == NodeKind::Cpu) {
       stepCode += QStringLiteral(
-          "    {\n"
+          "    if (status == kOfxStatOK) {\n"
           "      NrCpuImage inImg{width, height, width * 4, in};\n"
           "      NrCpuImage outImg{width, height, width * 4, out};\n"
-          "      %1(&inImg, &outImg);\n"
-          "      std::swap(in, out);\n"
+          "      if (%1(&inImg, &outImg) != 0) {\n"
+          "        report(instance, \"CPU-Kernel fehlgeschlagen.\");\n"
+          "        status = kOfxStatFailed;\n"
+          "      } else {\n"
+          "        std::swap(in, out);\n"
+          "      }\n"
           "    }\n")
                       .arg(step.symbol);
     } else if (step.kind == NodeKind::Cuda) {
       stepCode += QStringLiteral(
-          "    if (!nrGpuLaunchCuda(%1, in, out, width, height, &gpuError)) {\n"
-          "      status = kOfxStatFailed;\n"
-          "    } else {\n"
-          "      std::swap(in, out);\n"
+          "    if (status == kOfxStatOK) {\n"
+          "      if (!nrGpuLaunchCuda(%1, in, out, width, height, &gpuError)) {\n"
+          "        report(instance, gpuError.empty() ? \"CUDA-Launch fehlgeschlagen.\" : gpuError.c_str());\n"
+          "        status = kOfxStatFailed;\n"
+          "      } else {\n"
+          "        std::swap(in, out);\n"
+          "      }\n"
           "    }\n")
                       .arg(step.symbol);
     } else if (step.kind == NodeKind::OpenCl) {
       stepCode += QStringLiteral(
-          "    if (!nrGpuLaunchOpenCl(%1, in, out, width, height, &gpuError)) {\n"
-          "      status = kOfxStatFailed;\n"
-          "    } else {\n"
-          "      std::swap(in, out);\n"
+          "    if (status == kOfxStatOK) {\n"
+          "      if (!nrGpuLaunchOpenCl(%1, in, out, width, height, &gpuError)) {\n"
+          "        report(instance, gpuError.empty() ? \"OpenCL-Launch fehlgeschlagen.\" : gpuError.c_str());\n"
+          "        status = kOfxStatFailed;\n"
+          "      } else {\n"
+          "        std::swap(in, out);\n"
+          "      }\n"
           "    }\n")
                       .arg(step.symbol);
     }

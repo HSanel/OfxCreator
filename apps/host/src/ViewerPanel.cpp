@@ -30,12 +30,22 @@ public:
     update();
   }
 
+  void setPlaceholder(QString text)
+  {
+    m_placeholder = std::move(text);
+    update();
+  }
+
 protected:
   void paintEvent(QPaintEvent *) override
   {
     QPainter painter(this);
     painter.fillRect(rect(), QColor(48, 48, 48));
-    if (m_image.isNull() || width() < 2 || height() < 2) {
+    if (m_image.isNull()) {
+      painter.setPen(QColor(190, 190, 190));
+      painter.drawText(rect().adjusted(12, 12, -12, -12),
+                       Qt::AlignCenter | Qt::TextWordWrap,
+                       m_placeholder.isEmpty() ? QStringLiteral("Kein Bild") : m_placeholder);
       return;
     }
 
@@ -48,6 +58,7 @@ protected:
 
 private:
   QImage m_image;
+  QString m_placeholder;
 };
 
 ViewerPanel::ViewerPanel(QWidget *parent)
@@ -141,7 +152,13 @@ void ViewerPanel::setImage(QImage const &image)
     m_info->setText(QStringLiteral("Kein Bild"));
   } else {
     m_info->setText(QStringLiteral("%1 × %2").arg(image.width()).arg(image.height()));
+    m_imageView->setPlaceholder({});
   }
+}
+
+void ViewerPanel::setPlaceholder(QString const &text)
+{
+  m_imageView->setPlaceholder(text);
 }
 
 void ViewerPanel::setSource(QString const &source)

@@ -8,6 +8,9 @@
 
 class PlaybackState;
 class ViewerPanel;
+class NrOfxLoader;
+class QAction;
+class QLabel;
 
 namespace QtNodes {
 class DataFlowGraphModel;
@@ -40,6 +43,13 @@ private:
   bool saveDocument();
   bool saveDocumentAs();
   void exportOfx();
+  void loadOfxPlugin();
+  bool tryLoadOfx(QString const &path);
+  bool loadOfxIntoPluginNode(QString const &path);
+  QtNodes::NodeId findPluginNodeId(QtNodes::NodeId preferred) const;
+  QtNodes::NodeId ensurePluginNode();
+  void updateOfxUi();
+  QImage currentInputImage();
 
   void inspectNode(QtNodes::NodeId nodeId);
   void inspectPort(QtNodes::NodeId nodeId, QtNodes::PortType portType, QtNodes::PortIndex portIndex);
@@ -58,6 +68,10 @@ private:
   PlaybackState *m_playback = nullptr;
   ViewerPanel *m_viewer = nullptr;
   QString m_documentPath;
+  std::unique_ptr<NrOfxLoader> m_ofxLoader;
+  QAction *m_ofxPreviewAction = nullptr;
+  QLabel *m_ofxBadge = nullptr;
+  QString m_lastOfxDir;
 
   enum class InspectKind { None, Node, Port, Connection };
   InspectKind m_inspectKind = InspectKind::None;

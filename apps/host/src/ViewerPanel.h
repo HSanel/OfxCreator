@@ -18,6 +18,7 @@ public:
   explicit ViewerPanel(QWidget *parent = nullptr);
 
   void setImage(QImage const &image);
+  void setPlaceholder(QString const &text);
   void setSource(QString const &source);
   void setFrameRange(int frameCount);
   void setFrame(int frame);

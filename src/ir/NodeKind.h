@@ -9,6 +9,7 @@ enum class NodeKind {
   Cuda,
   OpenCl,
   Python,
+  Plugin,
   Unknown
 };
 
@@ -27,6 +28,8 @@ inline QString nodeKindId(NodeKind kind)
     return QStringLiteral("OpenCL");
   case NodeKind::Python:
     return QStringLiteral("Python");
+  case NodeKind::Plugin:
+    return QStringLiteral("Plugin");
   case NodeKind::Unknown:
     break;
   }
@@ -52,6 +55,9 @@ inline NodeKind nodeKindFromId(QString const &id)
   }
   if (id == QLatin1String("Python")) {
     return NodeKind::Python;
+  }
+  if (id == QLatin1String("Plugin")) {
+    return NodeKind::Plugin;
   }
   return NodeKind::Unknown;
 }

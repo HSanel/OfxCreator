@@ -30,6 +30,7 @@ public:
 
   QString sequencePath() const { return m_sourcePath; }
   int frameCount() const { return m_sequence.frameCount(); }
+  QImage currentImage() const;
   void setSequencePath(QString const &path);
 
 Q_SIGNALS:

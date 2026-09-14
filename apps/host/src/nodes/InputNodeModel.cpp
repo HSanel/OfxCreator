@@ -44,6 +44,12 @@ std::shared_ptr<QtNodes::NodeData> InputNodeModel::outData(QtNodes::PortIndex)
   return std::make_shared<ImageData>(std::move(image), frame);
 }
 
+QImage InputNodeModel::currentImage() const
+{
+  int const frame = m_playback ? m_playback->frame() : 0;
+  return m_sequence.loadFrame(frame);
+}
+
 QWidget *InputNodeModel::embeddedWidget()
 {
   if (m_widget) {

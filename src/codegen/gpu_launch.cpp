@@ -7,7 +7,9 @@
 #  include <windows.h>
 #endif
 
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -16,6 +18,38 @@ namespace {
 HMODULE loadLib(char const *name)
 {
   return LoadLibraryA(name);
+}
+
+HMODULE loadNvrtc()
+{
+  char const *names[] = {"nvrtc64_130_0.dll", "nvrtc64_124_0.dll", "nvrtc64_120_0.dll", "nvrtc64_112_0.dll",
+                         "nvrtc64_111_0.dll", "nvrtc64_110_0.dll", "nvrtc64_102_0.dll", "nvrtc.dll"};
+  for (char const *name : names) {
+    if (HMODULE m = loadLib(name)) {
+      return m;
+    }
+  }
+  std::string cudaBin;
+  if (char const *cuda = std::getenv("CUDA_PATH")) {
+    cudaBin = std::string(cuda) + "\\bin\\";
+  }
+  char const *search[] = {cudaBin.empty() ? nullptr : cudaBin.c_str(),
+                          "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6\\bin\\",
+                          "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4\\bin\\",
+                          "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.2\\bin\\",
+                          "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.8\\bin\\"};
+  for (char const *dir : search) {
+    if (!dir) {
+      continue;
+    }
+    for (char const *name : names) {
+      std::string path = std::string(dir) + name;
+      if (HMODULE m = LoadLibraryA(path.c_str())) {
+        return m;
+      }
+    }
+  }
+  return nullptr;
 }
 
 template<typename T>
@@ -183,22 +217,18 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
   using nvrtcResult = int;
 
   HMODULE driver = loadLib("nvcuda.dll");
-  HMODULE nvrtc = loadLib("nvrtc64_120_0.dll");
-  if (!nvrtc) {
-    nvrtc = loadLib("nvrtc64_130_0.dll");
-  }
-  if (!nvrtc) {
-    nvrtc = loadLib("nvrtc64_110_0.dll");
-  }
+  HMODULE nvrtc = loadNvrtc();
   if (!driver || !nvrtc) {
     if (error) {
-      *error = "CUDA/NVRTC nicht gefunden.";
+      *error = "CUDA/NVRTC nicht gefunden (nvcuda.dll / nvrtc64_*.dll).";
     }
     return false;
   }
 
   auto cuInit = loadSym<CUresult (*)(unsigned int)>(driver, "cuInit");
   auto cuDeviceGet = loadSym<CUresult (*)(CUdevice *, int)>(driver, "cuDeviceGet");
+  auto cuDeviceGetAttribute = loadSym<CUresult (*)(int *, int, CUdevice)>(driver, "cuDeviceGetAttribute");
+  auto cuGetErrorName = loadSym<CUresult (*)(CUresult, char const **)>(driver, "cuGetErrorName");
   auto cuCtxCreate = loadSym<CUresult (*)(CUcontext *, unsigned int, CUdevice)>(driver, "cuCtxCreate_v2");
   auto cuCtxDestroy = loadSym<CUresult (*)(CUcontext)>(driver, "cuCtxDestroy_v2");
   auto cuMemAlloc = loadSym<CUresult (*)(CUdeviceptr *, size_t)>(driver, "cuMemAlloc_v2");
@@ -222,52 +252,105 @@ bool nrGpuLaunchCuda(char const *source, unsigned char const *input, unsigned ch
   auto nvrtcGetProgramLogSize = loadSym<nvrtcResult (*)(nvrtcProgram, size_t *)>(nvrtc, "nvrtcGetProgramLogSize");
   auto nvrtcGetProgramLog = loadSym<nvrtcResult (*)(nvrtcProgram, char *)>(nvrtc, "nvrtcGetProgramLog");
 
-  if (!cuInit || !nvrtcCompileProgram || !cuLaunchKernel) {
+  auto cudaName = [&](CUresult rc) {
+    char const *name = nullptr;
+    if (cuGetErrorName) {
+      cuGetErrorName(rc, &name);
+    }
+    return name ? std::string(name) : std::to_string(rc);
+  };
+
+  if (!cuInit || !nvrtcCompileProgram || !cuLaunchKernel || !cuModuleLoadData) {
     if (error) {
       *error = "CUDA-Symbole fehlen.";
     }
     return false;
   }
-  if (cuInit(0) != 0) {
+  CUresult rc = cuInit(0);
+  if (rc != 0) {
     if (error) {
-      *error = "cuInit fehlgeschlagen.";
+      *error = "cuInit fehlgeschlagen (" + cudaName(rc) + ").";
     }
     return false;
   }
-  nvrtcProgram prog = nullptr;
-  if (nvrtcCreateProgram(&prog, source, "kernel.cu", 0, nullptr, nullptr) != 0) {
-    if (error) {
-      *error = "nvrtcCreateProgram fehlgeschlagen.";
-    }
-    return false;
-  }
-  char const *opts[] = {"--gpu-architecture=compute_75"};
-  if (nvrtcCompileProgram(prog, 1, opts) != 0) {
-    size_t logSize = 0;
-    nvrtcGetProgramLogSize(prog, &logSize);
-    std::string log(logSize, '\0');
-    nvrtcGetProgramLog(prog, log.data());
-    nvrtcDestroyProgram(&prog);
-    if (error) {
-      *error = log;
-    }
-    return false;
-  }
-  size_t ptxSize = 0;
-  nvrtcGetPTXSize(prog, &ptxSize);
-  std::vector<char> ptx(ptxSize);
-  nvrtcGetPTX(prog, ptx.data());
-  nvrtcDestroyProgram(&prog);
-
   CUdevice dev = 0;
+  rc = cuDeviceGet(&dev, 0);
+  if (rc != 0) {
+    if (error) {
+      *error = "Kein CUDA-Gerät (" + cudaName(rc) + ").";
+    }
+    return false;
+  }
+  int major = 0;
+  int minor = 0;
+  // CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR/MINOR = 75/76
+  if (cuDeviceGetAttribute) {
+    cuDeviceGetAttribute(&major, 75, dev);
+    cuDeviceGetAttribute(&minor, 76, dev);
+  }
   CUcontext ctx = nullptr;
-  cuDeviceGet(&dev, 0);
-  cuCtxCreate(&ctx, 0, dev);
-  CUmodule mod = nullptr;
-  if (cuModuleLoadData(&mod, ptx.data()) != 0) {
+  rc = cuCtxCreate(&ctx, 0, dev);
+  if (rc != 0) {
+    if (error) {
+      *error = "cuCtxCreate fehlgeschlagen (" + cudaName(rc) + ").";
+    }
+    return false;
+  }
+
+  auto compilePtx = [&](char const *const *opts, int nOpts, std::vector<char> *ptxOut, std::string *compileError) {
+    nvrtcProgram prog = nullptr;
+    if (nvrtcCreateProgram(&prog, source, "kernel.cu", 0, nullptr, nullptr) != 0) {
+      *compileError = "nvrtcCreateProgram fehlgeschlagen.";
+      return false;
+    }
+    if (nvrtcCompileProgram(prog, nOpts, opts) != 0) {
+      size_t logSize = 0;
+      nvrtcGetProgramLogSize(prog, &logSize);
+      std::string log(logSize, '\0');
+      nvrtcGetProgramLog(prog, log.data());
+      nvrtcDestroyProgram(&prog);
+      *compileError = log.empty() ? "NVRTC-Kompilierung fehlgeschlagen." : log;
+      return false;
+    }
+    size_t ptxSize = 0;
+    nvrtcGetPTXSize(prog, &ptxSize);
+    if (ptxSize == 0) {
+      nvrtcDestroyProgram(&prog);
+      *compileError = "NVRTC lieferte leeres PTX.";
+      return false;
+    }
+    ptxOut->assign(ptxSize, '\0');
+    nvrtcGetPTX(prog, ptxOut->data());
+    nvrtcDestroyProgram(&prog);
+    return true;
+  };
+
+  std::vector<char> ptx;
+  std::string compileError;
+  bool compiled = false;
+  if (major > 0) {
+    std::string arch = "--gpu-architecture=compute_" + std::to_string(major * 10 + minor);
+    char const *opts[] = {arch.c_str()};
+    compiled = compilePtx(opts, 1, &ptx, &compileError);
+  }
+  if (!compiled) {
+    compiled = compilePtx(nullptr, 0, &ptx, &compileError);
+  }
+  if (!compiled) {
     cuCtxDestroy(ctx);
     if (error) {
-      *error = "cuModuleLoadData fehlgeschlagen.";
+      *error = compileError;
+    }
+    return false;
+  }
+
+  CUmodule mod = nullptr;
+  rc = cuModuleLoadData(&mod, ptx.data());
+  if (rc != 0) {
+    cuCtxDestroy(ctx);
+    if (error) {
+      *error = "cuModuleLoadData fehlgeschlagen (" + cudaName(rc)
+               + (major > 0 ? ", sm_" + std::to_string(major) + std::to_string(minor) : std::string()) + ").";
     }
     return false;
   }

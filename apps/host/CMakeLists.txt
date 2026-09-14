@@ -2,6 +2,8 @@ add_executable(ofx_host
   src/main.cpp
   src/HostGraphicsView.cpp
   src/HostGraphicsView.h
+  src/HostGraphModel.cpp
+  src/HostGraphModel.h
   src/MainWindow.cpp
   src/MainWindow.h
   src/OfxSdkProbe.cpp
@@ -18,6 +20,8 @@ add_executable(ofx_host
   src/nodes/KernelNodeModel.h
   src/nodes/OutputNodeModel.cpp
   src/nodes/OutputNodeModel.h
+  src/nodes/PluginNodeModel.cpp
+  src/nodes/PluginNodeModel.h
   ${CMAKE_SOURCE_DIR}/src/ir/Pipeline.cpp
   ${CMAKE_SOURCE_DIR}/src/io/ImageSequence.cpp
   ${CMAKE_SOURCE_DIR}/src/io/VideoIngest.cpp
@@ -27,6 +31,13 @@ add_executable(ofx_host
   ${CMAKE_SOURCE_DIR}/src/runtime/PortInference.cpp
   ${CMAKE_SOURCE_DIR}/src/runtime/PythonRuntime.cpp
   ${CMAKE_SOURCE_DIR}/src/codegen/OfxExporter.cpp
+  src/ofx/NrOfxHost.cpp
+  src/ofx/NrOfxHost.h
+  src/ofx/NrOfxIncludes.h
+  src/ofx/NrOfxInstance.cpp
+  src/ofx/NrOfxInstance.h
+  src/ofx/NrOfxLoader.cpp
+  src/ofx/NrOfxLoader.h
 )
 
 target_include_directories(ofx_host
@@ -42,6 +53,7 @@ target_link_libraries(ofx_host
     Qt6::Widgets
     QtNodes::QtNodes
     OpenFX::Headers
+    OfxHostSupport
 )
 
 target_compile_definitions(ofx_host
