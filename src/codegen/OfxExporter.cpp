@@ -564,6 +564,11 @@ static OfxStatus pluginMain(char const *action, void const *handle, OfxPropertyS
     if (std::strcmp(action, kOfxImageEffectActionDescribeInContext) == 0) {
       return describeInContext(effect, inArgs);
     }
+    if (std::strcmp(action, kOfxActionCreateInstance) == 0
+        || std::strcmp(action, kOfxActionDestroyInstance) == 0
+        || std::strcmp(action, kOfxActionUnload) == 0) {
+      return kOfxStatOK;
+    }
     if (std::strcmp(action, kOfxImageEffectActionRender) == 0) {
       return render(effect, inArgs, outArgs);
     }
